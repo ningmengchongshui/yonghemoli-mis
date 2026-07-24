@@ -40,7 +40,7 @@ services:
       - MIS_OIDC_ISSUER=https://auth.alemonjs.com
       - MIS_OIDC_CLIENT_ID=app_b90dfce1fdd6d46187b5170e8f7b9a35
       - MIS_OIDC_CLIENT_SECRET=3a594c4b6923b1c794dd11a36810362715e33ae4cb6e5d5d8d5f75d0dce2fb22
-      - MIS_OIDC_REDIRECT_URL=https://yonhemoli.com/oidc/callback
+      - MIS_OIDC_REDIRECT_URL=https://yonghemoli.com/oidc/callback
     ports:
       - "15980:8080"
     volumes:
