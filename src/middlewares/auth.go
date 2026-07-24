@@ -34,8 +34,8 @@ func AuthRequired() gin.HandlerFunc {
 
 		c.Set("userID", sess.AdminID)
 		c.Set("username", sess.Username)
-		c.Set("isSuperAdmin", sess.IsSuperAdmin)
-		c.Set("roleID", sess.RoleID)
+		c.Set("roles", sess.Roles)
+		c.Set("permissions", sess.Permissions)
 		c.Next()
 	}
 }

@@ -15,6 +15,7 @@ Base URL：`https://yonghemoli.com/api/mini`
 - `POST /auth/wechat-login`：微信手机号授权登录。
 - `POST /auth/douyin-login`：抖音 `tt.login` 授权登录；首次账号会返回 `needPhoneAuth` 和 10 分钟有效的 `authToken`。
 - `POST /auth/douyin-phone-login`：将抖音 `getPhoneNumber` 回调的 `phoneCode`（基础库 3.51+）与 `authToken` 提交，完成手机号绑定并登录；旧版 `encryptedData`、`iv` 仍兼容。
+- `POST /auth/alipay-login`：支付宝 `my.getAuthCode({ scopes: ['auth_base'] })` 授权登录。
 - `POST /auth/phone-code`：发送短信验证码。
 - `POST /auth/phone-login`：手机号验证码登录。
 - `GET /users/me`：当前用户，需登录。

@@ -20,21 +20,15 @@ func SetupRoutes(r *gin.Engine) {
 	chatws.RegisterRoutes(api, chatws.RoleAdmin)
 
 	// 公开接口
-	api.POST("/login", user.Login)
-	api.GET("/session", user.Session)
+	api.POST("/oidc/authorize", user.OIDCAuthorize)
+	api.POST("/oidc/callback", user.OIDCCallback)
+	api.GET("/oidc/session", user.OIDCSession)
 	api.POST("/logout", user.Logout)
 
 	// 需要认证的接口
 	auth := api.Group("", middlewares.AuthRequired())
 	{
-		// 内部账户
 		auth.GET("/me", user.Me)
-		auth.GET("/admin/accounts", user.ListAccounts)
-		auth.POST("/admin/accounts", user.CreateAccount)
-		auth.PUT("/admin/accounts/:id", user.UpdateAccount)
-		auth.POST("/admin/accounts/:id/reset-password", user.ResetAccountPassword)
-		auth.POST("/admin/accounts/:id/disable", user.DisableAccount)
-		auth.POST("/admin/accounts/:id/enable", user.EnableAccount)
 		auth.POST("/uploads/image", misapi.UploadImage)
 		auth.POST("/uploads/file", misapi.UploadFile)
 

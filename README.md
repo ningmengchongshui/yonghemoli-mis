@@ -78,6 +78,15 @@ MIS_MINI_DOUYIN_PHONE_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----
 
 首次授权会要求用户通过 `getPhoneNumber` 绑定手机号；请先在抖音开放平台为该小程序申请“获取用户手机号”能力，并在“开发配置 > 应用公钥”上传与此私钥匹配的公钥。
 
+## 支付宝小程序登录配置
+
+```text
+MIS_MINI_ALIPAY_APPID=2021xxxxxxxxxxxx
+MIS_MINI_ALIPAY_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----"
+```
+
+支付宝端调用 `my.getAuthCode({ scopes: ['auth_base'] })`；服务端用 RSA2 签名请求换取稳定 `user_id`。首次登录无需伪造手机号，手机号应只在用户主动授权后另行绑定。
+
 ## 验证
 
 ```sh

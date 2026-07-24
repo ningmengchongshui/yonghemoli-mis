@@ -271,20 +271,15 @@ func UpdateResumeStatus(c *gin.Context) { updateBusinessStatus(c, "RESUME") }
 func AssignDemand(c *gin.Context)       { assignBusiness(c, "DEMAND") }
 func AssignResume(c *gin.Context)       { assignBusiness(c, "RESUME") }
 func assignBusiness(c *gin.Context, entityType string) {
-	var req struct {
-		AdminID uint `json:"adminId"`
-	}
-	if c.ShouldBindJSON(&req) != nil || req.AdminID == 0 {
-		response.Error(c, 400, "顾问账号不能为空")
-		return
-	}
-	admin, err := db.GetAdminByID(req.AdminID)
-	if err != nil || admin.Status != db.AdminStatusActive {
-		response.Error(c, 400, "顾问账号不存在或已停用")
+	// The assignee is the authenticated Auth subject. Local administrator
+	// accounts no longer exist in this application.
+	adminID := c.GetUint("userID")
+	if adminID == 0 {
+		response.Error(c, 401, "未登录")
 		return
 	}
 	if entityType == "DEMAND" {
-		row, err := db.AssignDemand(c.Param("id"), req.AdminID)
+		row, err := db.AssignDemand(c.Param("id"), adminID)
 		if err != nil {
 			response.Error(c, 400, err.Error())
 			return
@@ -292,7 +287,7 @@ func assignBusiness(c *gin.Context, entityType string) {
 		response.OK(c, gin.H{"item": row})
 		return
 	}
-	row, err := db.AssignResume(c.Param("id"), req.AdminID)
+	row, err := db.AssignResume(c.Param("id"), adminID)
 	if err != nil {
 		response.Error(c, 400, err.Error())
 		return

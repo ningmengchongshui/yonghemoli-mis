@@ -33,6 +33,14 @@ func GetMiniUserByDouyinOpenID(openID string) (*CustomerDO, error) {
 	return &row, nil
 }
 
+func GetMiniUserByAlipayUserID(userID string) (*CustomerDO, error) {
+	var row CustomerDO
+	if err := Get().First(&row, "alipay_user_id = ?", userID).Error; err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
 func GetMiniUserByPhone(phone string) (*CustomerDO, error) {
 	var row CustomerDO
 	if err := Get().First(&row, "phone = ?", phone).Error; err != nil {
@@ -46,6 +54,15 @@ func UpsertMiniUserProfile(row *CustomerDO) error {
 		return fmt.Errorf("user id required")
 	}
 	return Get().Save(row).Error
+}
+
+// CreateMiniUserWithoutPhone 用于已完成第三方身份授权、但尚未主动授权手机号
+// 的用户。手机号列必须允许 NULL，避免空字符串触发唯一索引冲突。
+func CreateMiniUserWithoutPhone(row *CustomerDO) error {
+	if row.ID == "" {
+		return fmt.Errorf("user id required")
+	}
+	return Get().Omit("phone").Create(row).Error
 }
 
 func GetAppConfig(key string) (*AppConfigDO, error) {

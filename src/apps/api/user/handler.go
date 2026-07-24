@@ -1,230 +1,154 @@
 package user
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"github.com/gin-gonic/gin"
 	"net/http"
+	"net/url"
 	"strconv"
-
+	"strings"
+	"time"
 	"yonghemolimis/src/apps/api/response"
-	"yonghemolimis/src/dao/db"
 	"yonghemolimis/src/middlewares"
 	"yonghemolimis/src/pkgs/session"
-
-	"github.com/gin-gonic/gin"
+	"yonghemolimis/src/settings"
 )
 
-func Login(c *gin.Context) {
-	var req struct {
-		Username string `json:"username" form:"username" binding:"required"`
-		Password string `json:"password" form:"password" binding:"required"`
-	}
-	if err := c.ShouldBind(&req); err != nil {
-		response.Fail(c, "账号和密码不能为空")
+const stateCookie = "yh_oidc_state"
+const verifierCookie = "yh_oidc_verifier"
+
+func OIDCAuthorize(c *gin.Context) {
+	if !configured() {
+		response.Error(c, 500, "OIDC 客户端未配置")
 		return
 	}
-
-	admin, err := db.VerifyAdminCredentials(req.Username, req.Password)
-	if err != nil {
-		response.Error(c, http.StatusUnauthorized, "账号或密码错误")
+	var b struct {
+		RedirectURL string `json:"redirect_uri" form:"redirect_uri" binding:"required"`
+	}
+	if c.ShouldBind(&b) != nil || b.RedirectURL != settings.Conf.OIDC.RedirectURL {
+		response.Error(c, 400, "回调地址无效")
 		return
 	}
-	_ = db.UpdateAdminLastLogin(admin.ID)
-
-	sid := session.Create(admin.ID, admin.Username, admin.Email, "", admin.IsSuperAdmin, admin.RoleID)
-	c.SetCookie(middlewares.SessionCookieName, sid, 86400*7, "/", "", false, true)
-
-	response.OK(c, gin.H{"user": adminPayload(admin)})
+	state, e := random()
+	if e != nil {
+		response.Error(c, 500, "无法初始化登录")
+		return
+	}
+	v, e := random()
+	if e != nil {
+		response.Error(c, 500, "无法初始化登录")
+		return
+	}
+	sum := sha256.Sum256([]byte(v))
+	secure := prod()
+	c.SetCookie(stateCookie, state, 600, "/", "", secure, true)
+	c.SetCookie(verifierCookie, v, 600, "/", "", secure, true)
+	q := url.Values{"response_type": {"code"}, "client_id": {settings.Conf.OIDC.ClientID}, "redirect_uri": {settings.Conf.OIDC.RedirectURL}, "scope": {"openid profile email"}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}}
+	response.OK(c, gin.H{"authorizeURL": strings.TrimRight(settings.Conf.OIDC.IssuerURL, "/") + "/oauth/authorize?" + q.Encode()})
 }
-
-func Session(c *gin.Context) {
+func OIDCCallback(c *gin.Context) {
+	var b struct {
+		Code  string `json:"code" form:"code" binding:"required"`
+		State string `json:"state" form:"state" binding:"required"`
+	}
+	if c.ShouldBind(&b) != nil {
+		response.Error(c, 400, "授权响应无效")
+		return
+	}
+	s, e := c.Cookie(stateCookie)
+	v, e2 := c.Cookie(verifierCookie)
+	if e != nil || e2 != nil || s == "" || s != b.State || v == "" {
+		response.Error(c, 403, "登录请求已失效，请重新发起登录")
+		return
+	}
+	c.SetCookie(stateCookie, "", -1, "/", "", prod(), true)
+	c.SetCookie(verifierCookie, "", -1, "/", "", prod(), true)
+	u, e := exchange(b.Code, v)
+	if e != nil {
+		response.Error(c, 401, "OIDC 认证失败："+e.Error())
+		return
+	}
+	sid := session.Create(u.ID, u.Name, u.Email, "", u.Roles, u.Permissions)
+	c.SetCookie(middlewares.SessionCookieName, sid, 86400*7, "/", "", prod(), true)
+	response.OK(c, gin.H{"user": gin.H{"id": u.ID, "username": u.Name, "email": u.Email, "roles": u.Roles, "permissions": u.Permissions}})
+}
+func OIDCSession(c *gin.Context) {
 	sid, _ := c.Cookie(middlewares.SessionCookieName)
-	if sid == "" {
+	x := session.Get(sid)
+	if sid == "" || x == nil {
 		response.FailCode(c, 401, "未登录")
 		return
 	}
-
-	sess := session.Get(sid)
-	if sess == nil {
-		response.FailCode(c, 401, "登录已过期")
-		return
-	}
-
-	admin, err := db.GetAdminByID(sess.AdminID)
-	if err != nil || admin.Status != db.AdminStatusActive {
-		session.Destroy(sid)
-		c.SetCookie(middlewares.SessionCookieName, "", -1, "/", "", false, true)
-		response.FailCode(c, 401, "账号不可用，请重新登录")
-		return
-	}
-	response.OK(c, gin.H{"user": adminPayload(admin)})
+	response.OK(c, gin.H{"user": gin.H{"id": x.AdminID, "username": x.Username, "email": x.Email, "roles": x.Roles, "permissions": x.Permissions}})
 }
-
 func Logout(c *gin.Context) {
 	sid, _ := c.Cookie(middlewares.SessionCookieName)
-	if sid != "" {
-		session.Destroy(sid)
-	}
-	c.SetCookie(middlewares.SessionCookieName, "", -1, "/", "", false, true)
+	session.Destroy(sid)
+	c.SetCookie(middlewares.SessionCookieName, "", -1, "/", "", prod(), true)
 	response.OKMsg(c, "已登出")
 }
-
 func Me(c *gin.Context) {
-	userID, ok := c.Get("userID")
-	adminID, okID := userID.(uint)
-	if !ok || !okID {
-		response.Error(c, http.StatusUnauthorized, "未登录或会话已过期")
-		return
-	}
-	admin, err := db.GetAdminByID(adminID)
-	if err != nil || admin.Status != db.AdminStatusActive {
-		response.Error(c, http.StatusUnauthorized, "账号不可用，请重新登录")
-		return
-	}
-	response.OK(c, gin.H{"user": adminPayload(admin)})
+	response.OK(c, gin.H{"user": gin.H{"id": c.GetUint("userID"), "username": c.GetString("username"), "roles": c.GetStringSlice("roles"), "permissions": c.GetStringSlice("permissions")}})
 }
 
-func ListAccounts(c *gin.Context) {
-	if !requireSuperAdmin(c) {
-		return
-	}
-	rows, err := db.ListAdmins()
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	response.OK(c, gin.H{"list": rows})
+type oidcUser struct {
+	ID                 uint
+	Name, Email        string
+	Roles, Permissions []string
 }
 
-func CreateAccount(c *gin.Context) {
-	if !requireSuperAdmin(c) {
-		return
+func exchange(code, v string) (*oidcUser, error) {
+	issuer := strings.TrimRight(settings.Conf.OIDC.IssuerURL, "/")
+	f := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "client_id": {settings.Conf.OIDC.ClientID}, "client_secret": {settings.Conf.OIDC.ClientSecret}, "redirect_uri": {settings.Conf.OIDC.RedirectURL}, "code_verifier": {v}}
+	cl := &http.Client{Timeout: 10 * time.Second}
+	r, e := cl.PostForm(issuer+"/oauth/token", f)
+	if e != nil {
+		return nil, e
 	}
-	var req struct {
-		Username     string `json:"username" binding:"required"`
-		Password     string `json:"password" binding:"required"`
-		Name         string `json:"name" binding:"required"`
-		Email        string `json:"email" binding:"required"`
-		RoleID       *int64 `json:"roleId"`
-		IsSuperAdmin bool   `json:"isSuperAdmin"`
+	defer r.Body.Close()
+	var t struct {
+		AccessToken string `json:"access_token"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "参数错误")
-		return
+	if r.StatusCode != 200 || json.NewDecoder(r.Body).Decode(&t) != nil || t.AccessToken == "" {
+		return nil, fmt.Errorf("OIDC token 无效")
 	}
-	admin, err := db.CreateAdmin(db.AdminCreateInput{
-		Username:     req.Username,
-		Password:     req.Password,
-		Name:         req.Name,
-		Email:        req.Email,
-		RoleID:       req.RoleID,
-		IsSuperAdmin: req.IsSuperAdmin,
-	})
-	if err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
-		return
+	req, _ := http.NewRequest("GET", issuer+"/oauth/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+t.AccessToken)
+	p, e := cl.Do(req)
+	if e != nil {
+		return nil, e
 	}
-	response.OK(c, gin.H{"user": adminPayload(admin)})
+	defer p.Body.Close()
+	var x struct {
+		Subject           string   `json:"sub"`
+		Name              string   `json:"name"`
+		PreferredUsername string   `json:"preferred_username"`
+		Email             string   `json:"email"`
+		Roles             []string `json:"roles"`
+		Permissions       []string `json:"permissions"`
+	}
+	if p.StatusCode != 200 || json.NewDecoder(p.Body).Decode(&x) != nil {
+		return nil, fmt.Errorf("OIDC userinfo 无效")
+	}
+	id, e := strconv.ParseUint(x.Subject, 10, 64)
+	if e != nil || id == 0 {
+		return nil, fmt.Errorf("OIDC subject 无效")
+	}
+	if x.PreferredUsername != "" {
+		x.Name = x.PreferredUsername
+	}
+	return &oidcUser{uint(id), x.Name, x.Email, x.Roles, x.Permissions}, nil
 }
-
-func UpdateAccount(c *gin.Context) {
-	if !requireSuperAdmin(c) {
-		return
-	}
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || id <= 0 {
-		response.Fail(c, "账户ID错误")
-		return
-	}
-	var req struct {
-		Name         string `json:"name"`
-		Email        string `json:"email"`
-		RoleID       *int64 `json:"roleId"`
-		IsSuperAdmin *bool  `json:"isSuperAdmin"`
-		Status       string `json:"status"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "参数错误")
-		return
-	}
-	admin, err := db.UpdateAdmin(uint(id), db.AdminUpdateInput{
-		Name:         req.Name,
-		Email:        req.Email,
-		RoleID:       req.RoleID,
-		IsSuperAdmin: req.IsSuperAdmin,
-		Status:       req.Status,
-	})
-	if err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	response.OK(c, gin.H{"user": adminPayload(admin)})
+func configured() bool {
+	return settings.Conf.OIDC != nil && settings.Conf.OIDC.IssuerURL != "" && settings.Conf.OIDC.ClientID != "" && settings.Conf.OIDC.ClientSecret != "" && settings.Conf.OIDC.RedirectURL != ""
 }
-
-func ResetAccountPassword(c *gin.Context) {
-	if !requireSuperAdmin(c) {
-		return
-	}
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || id <= 0 {
-		response.Fail(c, "账户ID错误")
-		return
-	}
-	var req struct {
-		Password string `json:"password" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, "参数错误")
-		return
-	}
-	if err := db.ResetAdminPassword(uint(id), req.Password); err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	response.OKMsg(c, "密码已重置")
+func random() (string, error) {
+	b := make([]byte, 32)
+	_, e := rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b), e
 }
-
-func DisableAccount(c *gin.Context) {
-	updateAccountStatus(c, db.AdminStatusBlocked)
-}
-
-func EnableAccount(c *gin.Context) {
-	updateAccountStatus(c, db.AdminStatusActive)
-}
-
-func updateAccountStatus(c *gin.Context, status string) {
-	if !requireSuperAdmin(c) {
-		return
-	}
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || id <= 0 {
-		response.Fail(c, "账户ID错误")
-		return
-	}
-	if err := db.UpdateAdminStatus(uint(id), status); err != nil {
-		response.Error(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	response.OKMsg(c, "状态已更新")
-}
-
-func requireSuperAdmin(c *gin.Context) bool {
-	isSuperAdmin, _ := c.Get("isSuperAdmin")
-	if ok, _ := isSuperAdmin.(bool); ok {
-		return true
-	}
-	response.Error(c, http.StatusForbidden, "仅超级管理员可操作")
-	return false
-}
-
-func adminPayload(admin *db.AdminDO) gin.H {
-	return gin.H{
-		"id":           admin.ID,
-		"username":     admin.Username,
-		"name":         admin.Name,
-		"email":        admin.Email,
-		"avatar":       "",
-		"isSuperAdmin": admin.IsSuperAdmin,
-		"roleId":       admin.RoleID,
-		"status":       admin.Status,
-		"lastLoginAt":  admin.LastLoginAt,
-	}
-}
+func prod() bool { return settings.Conf.Mode == "release" || settings.Conf.Mode == "production" }

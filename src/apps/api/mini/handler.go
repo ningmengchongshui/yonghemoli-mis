@@ -31,6 +31,7 @@ func RegisterRoutes(r gin.IRouter) {
 	r.POST("/auth/wechat-login", WechatLogin)
 	r.POST("/auth/douyin-login", DouyinLogin)
 	r.POST("/auth/douyin-phone-login", DouyinPhoneLogin)
+	r.POST("/auth/alipay-login", AlipayLogin)
 	r.POST("/auth/phone-code", PhoneCode)
 	r.POST("/auth/phone-login", PhoneLogin)
 	r.GET("/users/me", BusinessUserMe)
@@ -191,10 +192,60 @@ func DouyinPhoneLogin(c *gin.Context) {
 	loginSuccess(c, row)
 }
 
+// AlipayLogin 使用 my.getAuthCode 的 authCode 换取支付宝 user_id。首次用户
+// 可直接建立仅第三方身份的账户，手机号后续按用户主动授权再绑定。
+func AlipayLogin(c *gin.Context) {
+	var req struct {
+		AuthCode  string `json:"authCode"`
+		NickName  string `json:"nickName"`
+		AvatarURL string `json:"avatarUrl"`
+	}
+	if c.ShouldBindJSON(&req) != nil || strings.TrimSpace(req.AuthCode) == "" {
+		businessFail(c, 400, 40000, "支付宝授权凭证不能为空")
+		return
+	}
+	session, err := alipayCodeToSession(req.AuthCode)
+	if err != nil {
+		businessFail(c, 400, 40002, "支付宝授权凭证错误、已失效或服务未配置")
+		return
+	}
+	row, err := db.GetMiniUserByAlipayUserID(session.UserID)
+	created := false
+	if err != nil {
+		row = &db.CustomerDO{ID: newMiniUserID(), AlipayUserID: session.UserID, Nickname: "支付宝用户", Status: db.CustomerStatusActive, CreatedAt: time.Now()}
+		if strings.TrimSpace(req.NickName) != "" {
+			row.Nickname = strings.TrimSpace(req.NickName)
+		}
+		if strings.TrimSpace(req.AvatarURL) != "" {
+			row.Avatar = strings.TrimSpace(req.AvatarURL)
+		}
+		row.LastLoginAt = time.Now().Format("2006-01-02 15:04:05")
+		row.UpdatedAt = time.Now()
+		if err := db.CreateMiniUserWithoutPhone(row); err != nil {
+			businessFail(c, 500, 50000, "创建支付宝用户失败")
+			return
+		}
+		created = true
+	}
+	if row.Status != db.CustomerStatusActive {
+		businessFail(c, 403, 40300, "账号已被禁用")
+		return
+	}
+	row.LastLoginAt = time.Now().Format("2006-01-02 15:04:05")
+	row.UpdatedAt = time.Now()
+	if !created {
+		if err := db.UpsertMiniUserProfile(row); err != nil {
+			businessFail(c, 500, 50000, "登录失败")
+			return
+		}
+	}
+	loginSuccess(c, row)
+}
+
 func loginSuccess(c *gin.Context, row *db.CustomerDO) {
 	user := userFromDO(*row)
 	user.Phone = maskPhone(row.Phone)
-	businessOK(c, http.StatusOK, gin.H{"token": createMiniToken(row.ID), "expiresIn": 30 * 24 * 60 * 60, "user": user, "isBoundPhone": true})
+	businessOK(c, http.StatusOK, gin.H{"token": createMiniToken(row.ID), "expiresIn": 30 * 24 * 60 * 60, "user": user, "isBoundPhone": strings.TrimSpace(row.Phone) != ""})
 }
 
 func PhoneCode(c *gin.Context)  { phoneCode(c) }

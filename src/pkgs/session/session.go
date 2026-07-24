@@ -9,14 +9,14 @@ import (
 
 // Session 会话数据
 type Session struct {
-	AdminID      uint   // 本地管理员 ID
-	Username     string // 显示名
-	Email        string
-	Avatar       string
-	IsSuperAdmin bool
-	RoleID       *int64
-	CreatedAt    time.Time
-	ExpiresAt    time.Time
+	AdminID     uint   // Auth 用户 ID（兼容既有业务操作者字段）
+	Username    string // 显示名
+	Email       string
+	Avatar      string
+	Roles       []string
+	Permissions []string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
 }
 
 var (
@@ -26,19 +26,19 @@ var (
 )
 
 // Create 创建新会话，返回 sessionID
-func Create(adminID uint, username, email, avatar string, isSuperAdmin bool, roleID *int64) string {
+func Create(adminID uint, username, email, avatar string, roles, permissions []string) string {
 	sid := generateID()
 	mu.Lock()
 	defer mu.Unlock()
 	store[sid] = &Session{
-		AdminID:      adminID,
-		Username:     username,
-		Email:        email,
-		Avatar:       avatar,
-		IsSuperAdmin: isSuperAdmin,
-		RoleID:       roleID,
-		CreatedAt:    time.Now(),
-		ExpiresAt:    time.Now().Add(ttl),
+		AdminID:     adminID,
+		Username:    username,
+		Email:       email,
+		Avatar:      avatar,
+		Roles:       roles,
+		Permissions: permissions,
+		CreatedAt:   time.Now(),
+		ExpiresAt:   time.Now().Add(ttl),
 	}
 	return sid
 }

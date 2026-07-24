@@ -1,10 +1,12 @@
 package miniapi
 
 import (
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -13,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +69,12 @@ type douyinPendingSession struct {
 	OpenID     string
 	SessionKey string
 	ExpiresAt  time.Time
+}
+
+type alipayOAuthSession struct {
+	UserID string `json:"user_id"`
+	Code   string `json:"code"`
+	Msg    string `json:"msg"`
 }
 
 type douyinClientTokenCache struct {
@@ -224,6 +233,85 @@ func douyinCodeToSession(code string) (*douyinSession, error) {
 		return nil, fmt.Errorf("douyin code2session failed: %s", out.ErrTips)
 	}
 	return &out, nil
+}
+
+// alipayCodeToSession 用 authCode 换取支付宝稳定 user_id。支付宝网关要求请求
+// 参数以应用私钥做 RSA2 签名，私钥始终只存在于服务端。
+func alipayCodeToSession(authCode string) (*alipayOAuthSession, error) {
+	conf := settings.Conf.MiniAlipay
+	if conf == nil || conf.AppID == "" || strings.TrimSpace(conf.AppPrivateKey) == "" {
+		return nil, fmt.Errorf("mini alipay appid/private key not configured")
+	}
+	params := url.Values{
+		"app_id":     {conf.AppID},
+		"method":     {"alipay.system.oauth.token"},
+		"format":     {"JSON"},
+		"charset":    {"utf-8"},
+		"sign_type":  {"RSA2"},
+		"timestamp":  {time.Now().Format("2006-01-02 15:04:05")},
+		"version":    {"1.0"},
+		"grant_type": {"authorization_code"},
+		"code":       {authCode},
+	}
+	sign, err := signAlipayParams(params, conf.AppPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	params.Set("sign", sign)
+	resp, err := http.PostForm("https://openapi.alipay.com/gateway.do", params)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("alipay oauth http status %d", resp.StatusCode)
+	}
+	var result struct {
+		Response alipayOAuthSession `json:"alipay_system_oauth_token_response"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if result.Response.Code != "10000" || result.Response.UserID == "" {
+		return nil, fmt.Errorf("alipay oauth failed: %s", result.Response.Msg)
+	}
+	return &result.Response, nil
+}
+
+func signAlipayParams(params url.Values, privateKeyPEM string) (string, error) {
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		if key != "sign" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+params.Get(key))
+	}
+	block, _ := pem.Decode([]byte(privateKeyPEM))
+	if block == nil {
+		return "", fmt.Errorf("invalid alipay app private key")
+	}
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		parsed, parseErr := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if parseErr != nil {
+			return "", err
+		}
+		var ok bool
+		key, ok = parsed.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("alipay app private key must be RSA")
+		}
+	}
+	digest := sha256.Sum256([]byte(strings.Join(parts, "&")))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
 func createDouyinPendingToken(openID, sessionKey string) string {

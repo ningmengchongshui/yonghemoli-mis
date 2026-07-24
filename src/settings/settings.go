@@ -25,8 +25,16 @@ type AppConfig struct {
 	DB         *DatabaseConfig   `json:"database"`
 	MiniWechat *MiniWechatConfig `json:"mini_wechat"`
 	MiniDouyin *MiniDouyinConfig `json:"mini_douyin"`
+	MiniAlipay *MiniAlipayConfig `json:"mini_alipay"`
 	MiniSMS    *MiniSMSConfig    `json:"mini_sms"`
 	OSS        *OSSConfig        `json:"oss"`
+	OIDC       *OIDCConfig       `json:"oidc"`
+}
+type OIDCConfig struct {
+	IssuerURL    string `json:"issuer_url"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	RedirectURL  string `json:"redirect_url"`
 }
 
 type ServerConfig struct {
@@ -60,6 +68,12 @@ type MiniDouyinConfig struct {
 	AppID              string `json:"app_id"`
 	AppSecret          string `json:"app_secret"`
 	PhonePrivateKeyPEM string `json:"phone_private_key_pem"`
+}
+
+// MiniAlipayConfig 的私钥只用于服务端 RSA2 签名，严禁下发到小程序。
+type MiniAlipayConfig struct {
+	AppID         string `json:"app_id"`
+	AppPrivateKey string `json:"app_private_key"`
 }
 
 // MiniSMSConfig 使用通用 HTTP JSON 网关发送验证码。网关接收
@@ -117,6 +131,10 @@ func Init() error {
 		AppSecret:          getEnv("MIS_MINI_DOUYIN_SECRET", ""),
 		PhonePrivateKeyPEM: strings.ReplaceAll(getEnv("MIS_MINI_DOUYIN_PHONE_PRIVATE_KEY", ""), `\n`, "\n"),
 	}
+	Conf.MiniAlipay = &MiniAlipayConfig{
+		AppID:         getEnv("MIS_MINI_ALIPAY_APPID", ""),
+		AppPrivateKey: strings.ReplaceAll(getEnv("MIS_MINI_ALIPAY_APP_PRIVATE_KEY", ""), `\n`, "\n"),
+	}
 	Conf.MiniSMS = &MiniSMSConfig{
 		Endpoint: getEnv("MIS_MINI_SMS_ENDPOINT", ""),
 		Token:    getEnv("MIS_MINI_SMS_TOKEN", ""),
@@ -130,6 +148,7 @@ func Init() error {
 		Bucket:        getEnv("MIS_OSS_BUCKET", getEnv("MINIO_BUCKET", "oss-ui")),
 		PublicBaseURL: getEnv("MIS_OSS_PUBLIC_BASE_URL", getEnv("MINIO_PUBLIC_BASE_URL", "")),
 	}
+	Conf.OIDC = &OIDCConfig{IssuerURL: getEnv("MIS_OIDC_ISSUER", ""), ClientID: getEnv("MIS_OIDC_CLIENT_ID", ""), ClientSecret: getEnv("MIS_OIDC_CLIENT_SECRET", ""), RedirectURL: getEnv("MIS_OIDC_REDIRECT_URL", "")}
 
 	log.Printf("应用名称: %s", Conf.Name)
 	log.Printf("运行模式: %s", Conf.Mode)

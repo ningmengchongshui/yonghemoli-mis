@@ -23,9 +23,10 @@ type CustomerDO struct {
 	ID           string    `gorm:"size:32;primaryKey" json:"id"`
 	OpenID       string    `gorm:"size:128;uniqueIndex;column:openid" json:"openid"`
 	DouyinOpenID string    `gorm:"size:128;uniqueIndex;column:douyin_openid" json:"douyinOpenid"`
+	AlipayUserID string    `gorm:"size:128;uniqueIndex;column:alipay_user_id" json:"alipayUserId"`
 	Avatar       string    `gorm:"size:512;not null;default:''" json:"avatar"`
 	Nickname     string    `gorm:"size:64;not null" json:"nickname"`
-	Phone        string    `gorm:"size:32;uniqueIndex;not null" json:"phone"`
+	Phone        string    `gorm:"size:32;uniqueIndex" json:"phone"`
 	Signature    string    `gorm:"size:255;not null;default:''" json:"signature"`
 	LastLoginAt  string    `gorm:"size:32;column:last_login_at" json:"lastLoginAt"`
 	Status       string    `gorm:"size:32;index;not null;default:'active'" json:"status"`
